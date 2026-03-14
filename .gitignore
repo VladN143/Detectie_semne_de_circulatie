@@ -1,0 +1,4 @@
+/.vscode
+/Traffic_sign_detection_data
+/dataset_final_crop
+*.pth
