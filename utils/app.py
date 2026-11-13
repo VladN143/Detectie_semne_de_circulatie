@@ -1,102 +1,63 @@
 import customtkinter as ctk
 from tkinter import filedialog
-from PIL import Image, ImageTk
+from PIL import Image
 import numpy as np
 import cv2
 import joblib
-
-# IMPORTURI NOI PENTRU PYTORCH
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from ultralytics import YOLO
+import os
 
-# Importăm funcțiile de preprocesare existente
+
 from preprocessing import preprocess_for_hog, NUM_CLASSES
 
-#1. DEFINIREA MODELULUI (Copiată exact din train_CNN.py)
-class TrafficSignNet(nn.Module):
-    def __init__(self, num_classes):
-        super(TrafficSignNet, self).__init__()
-        
-        self.strat1=nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2)
-        )
-        
-        self.strat2=nn.Sequential(
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2)
-        )
-        
-        self.strat3=nn.Sequential(
-            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3),
-            nn.ReLU()
-        )
-        
-        self.dense=nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(64 * 4 * 4, 64),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(64, num_classes)
-        )
-        
-    def forward(self, x): 
-        x1=self.strat1(x)
-        x2=self.strat2(x1)
-        x3=self.strat3(x2)
-        x4=self.dense(x3)
-        return x4
 
-#CONFIGURĂRI GUI
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-# Dicționarul de clase (COMPLETEAZĂ-L CU CLASELE TALE!)
 CLASSES = {
-    0: "Limita 20",
-    1: "Limita 30",
-    2: "Limita 50",
-    3: "Limita 60",
+    0: "Limita 20", 
+    1: "Limita 30", 
+    2: "Limita 50", 
+    3: "Limita 60", 
     4: "Limita 70",
-    5: "Limita 80",
-    6: "Iesire limita 80",
-    7: "Limita 100",
+    5: "Limita 80", 
+    6: "Iesire limita 80", 
+    7: "Limita 100", 
     8: "Limita 120",
-    9: "Interis depasire",
-    10: "Interis depasire camioane",
+    9: "Interzis depasire", 
+    10: "Interzis depasire camioane", 
     11: "Intersectie",
-    12: "Prioritate",
-    13: "Cedeaza trecerea",
-    14: "STOP",
+    12: "Prioritate", 
+    13: "Cedeaza trecerea", 
+    14: "STOP", 
     15: "Interzis ambele sensuri",
-    16: "Interzis camioane",
-    17: "Interzis",
-    18: "Alte pericole",
+    16: "Interzis camioane", 
+    17: "Interzis", 
+    18: "Alte pericole", 
     19: "Curba la st.",
-    20: "Curba la dr.",
-    21: "Curba dubla prima dr.",
-    22: "Drum denivelat",
+    20: "Curba la dr.", 
+    21: "Curba dubla", 
+    22: "Drum denivelat", 
     23: "Drum alunecos",
-    24: "Drum ingustat pe dr.",
-    25: "Atentie lucrari",
-    26: "Semafor",
-    27: "Presemnalizare trecere pietoni",
-    28: "Copii",
-    29: "Biciclisti",
+    24: "Drum ingustat", 
+    25: "Atentie lucrari", 
+    26: "Presemnalizare semafor",
+    27: "Trecere pietoni", 
+    28: "Copii", 
+    29: "Biciclisti", 
     30: "Zapada",
-    31: "Animale",
-    32: "Sfarsit restrictii",
+    31: "Animale", 
+    32: "Sfarsit restrictii", 
     33: "Drea. Obligatoriu",
-    34: "Stg. Obligatoriu",
-    35: "Inainte",
+    34: "Stg. Obligatoriu", 
+    35: "Inainte", 
     36: "Inainte sau la st.",
-    37: "Inainte sau la dr.",
-    38: "Patreaza Dr.",
+    37: "Inainte sau la dr.", 
+    38: "Patreaza Dr.", 
     39: "Ocolire",
-    40: "Sens giratoriu",
+    40: "Sens giratoriu", 
     41: "Iesire zona interzis depasire",
     42: "Iesire zona interzis depasire camioane",
 }
@@ -106,18 +67,18 @@ class TrafficSignApp(ctk.CTk):
         super().__init__()
 
         self.title("Sistem Avansat Detecție & Recunoaștere Auto")
-        self.geometry("1100x700")
+        self.geometry("1200x750") 
 
         self.cnn_model = None
         self.svm_model = None
+        self.yolo_detector = None
         self.original_cv_image = None
-        self.processed_cv_image = None
 
-        # Layout
+        
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        #SIDEBAR
+        #1. SIDEBAR
         self.sidebar = ctk.CTkFrame(self, width=250, corner_radius=0)
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         
@@ -138,15 +99,105 @@ class TrafficSignApp(ctk.CTk):
         self.log_box.pack(pady=20, padx=10)
         self.log_box.insert("0.0", "Jurnal activități...\n")
 
-        #ZONA IMAGINE
-        self.image_frame = ctk.CTkFrame(self, fg_color="#2b2b2b")
-        self.image_frame.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
+        #2. TABVIEW (ZONA PRINCIPALĂ DIN DREAPTA)
+        self.tabview = ctk.CTkTabview(self)
+        self.tabview.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
         
-        self.img_label = ctk.CTkLabel(self.image_frame, text="Așteptare imagine...")
-        self.img_label.pack(expand=True, fill="both")
+        self.tabview.add("Scanare Imagine")
+        self.tabview.add("Performanță Modele")
+        
+        tab_scan = self.tabview.tab("Scanare Imagine")
+        tab_scan.grid_columnconfigure(0, weight=1)
+        tab_scan.grid_rowconfigure(0, weight=1) 
+        
+        self.img_label = ctk.CTkLabel(tab_scan, text="Așteptare imagine...")
+        self.img_label.grid(row=0, column=0, sticky="nsew")
 
-        # Încărcare Modele
+        self.results_frame = ctk.CTkScrollableFrame(tab_scan, orientation="horizontal", height=150)
+        self.results_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+
+        # Configurare Tab 2: Grafice 
+        self.setup_graphs_tab()
+
         self.load_models()
+
+    def setup_graphs_tab(self):
+        tab = self.tabview.tab("Performanță Modele")
+        
+        tab.grid_columnconfigure(0, weight=1)
+        tab.grid_rowconfigure(0, weight=1)
+     
+        scroll_frame = ctk.CTkScrollableFrame(tab, fg_color="transparent")
+        scroll_frame.grid(row=0, column=0, sticky="nsew")
+        
+        scroll_frame.grid_columnconfigure(0, weight=1)
+        
+        # ZONA CNN
+        ctk.CTkLabel(scroll_frame, text="Rezultate Antrenare CNN (PyTorch)", 
+                     font=("Arial", 20, "bold"), text_color="#00FF00").grid(row=0, column=0, pady=(20, 10))
+        
+        self.lbl_graph_cnn = ctk.CTkLabel(scroll_frame, text="Grafic CNN lipsă")
+        self.lbl_graph_cnn.grid(row=1, column=0, padx=20, pady=(0, 40)) 
+        
+        # ZONA SVM 
+        ctk.CTkLabel(scroll_frame, text="Rezultate Antrenare SVM", 
+                     font=("Arial", 20, "bold"), text_color="#E59400").grid(row=2, column=0, pady=(10, 10))
+        
+        self.lbl_graph_svm = ctk.CTkLabel(scroll_frame, text="Grafic SVM lipsă")
+        self.lbl_graph_svm.grid(row=3, column=0, padx=20, pady=(0, 30))
+        
+        self.load_graphs()
+
+    def load_graphs(self):
+        cnn_path = "grafic CNN.png" 
+        svm_path = "grafic SVM.png" 
+        
+        max_size = (850, 500) 
+        
+        if os.path.exists(cnn_path):
+            img_cnn = Image.open(cnn_path)
+            img_cnn.thumbnail(max_size, Image.Resampling.LANCZOS) 
+            tk_cnn = ctk.CTkImage(light_image=img_cnn, dark_image=img_cnn, size=img_cnn.size)
+            self.lbl_graph_cnn.configure(image=tk_cnn, text="")
+        else:
+            self.log(f"Nu am găsit imaginea: {cnn_path}")
+            
+        if os.path.exists(svm_path):
+            img_svm = Image.open(svm_path)
+            img_svm.thumbnail(max_size, Image.Resampling.LANCZOS)
+            tk_svm = ctk.CTkImage(light_image=img_svm, dark_image=img_svm, size=img_svm.size)
+            self.lbl_graph_svm.configure(image=tk_svm, text="")
+        else:
+            self.log(f"Nu am găsit imaginea: {svm_path}")
+
+    def clear_previous_results(self):
+       
+        for widget in self.results_frame.winfo_children():
+            widget.destroy()
+
+    def add_detection_to_ui(self, roi_cv, label_cnn, conf_cnn, label_svm):
+        roi_rgb = cv2.cvtColor(roi_cv, cv2.COLOR_BGR2RGB)
+        roi_pil = Image.fromarray(roi_rgb)
+        roi_pil = roi_pil.resize((80, 80)) 
+        tk_roi = ctk.CTkImage(light_image=roi_pil, dark_image=roi_pil, size=(80, 80))
+
+        card = ctk.CTkFrame(self.results_frame, fg_color="#3d3d3d", border_width=2, border_color="#555555")
+        card.pack(side="left", padx=10, pady=10)
+        
+        img_lbl = ctk.CTkLabel(card, image=tk_roi, text="")
+        img_lbl.pack(pady=5, padx=5)
+
+        cnn_frame = ctk.CTkFrame(card, fg_color="transparent")
+        cnn_frame.pack(fill="x", padx=5)
+        ctk.CTkLabel(cnn_frame, text="CNN:", font=("Arial", 10, "bold"), text_color="#00FF00").pack(side="left")
+        ctk.CTkLabel(cnn_frame, text=f"{label_cnn} ({int(conf_cnn)}%)", font=("Arial", 10)).pack(side="left", padx=5)
+
+        svm_frame = ctk.CTkFrame(card, fg_color="transparent")
+        svm_frame.pack(fill="x", padx=5, pady=(0, 5))
+        ctk.CTkLabel(svm_frame, text="SVM:", font=("Arial", 10, "bold"), text_color="#E59400").pack(side="left")
+        ctk.CTkLabel(svm_frame, text=f"{label_svm}", font=("Arial", 10)).pack(side="left", padx=5)
+
+        img_lbl.image = tk_roi
 
     def log(self, message):
         self.log_box.insert("end", f"> {message}\n")
@@ -155,82 +206,63 @@ class TrafficSignApp(ctk.CTk):
     def load_models(self):
         try:
             self.log("Se încarcă modelele...")
+            self.yolo_detector = YOLO('D:/Licenta/proiect Licenta/runs/detect/train8/weights/best.pt')
             
-            #Încărcare CNN PyTorch
-            # 1. Instanțiem clasa
+            from train_cnn import TrafficSignNet
+
             self.cnn_model = TrafficSignNet(NUM_CLASSES)
-            # 2. Încărcăm greutățile (weights)
             self.cnn_model.load_state_dict(torch.load('traffic_sign_CNN.pth', map_location=torch.device('cpu')))
-            # 3. CRUCIAL: Modul 'eval' oprește Dropout-ul la testare
             self.cnn_model.eval() 
             
-            #Încărcare SVM
             self.svm_model = joblib.load('traffic_sign_svm.pkl')
-            
             self.log("Modele încărcate cu succes (PyTorch + SVM).")
         except Exception as e:
             self.log(f"Eroare modele: {e}")
 
     def load_image(self):
-        file_path = filedialog.askopenfilename(filetypes=[("Images", "*.jpg;*.png;*.jpeg")])
+        file_path = filedialog.askopenfilename(
+            filetypes=[("Imagini", "*.jpg;*.jpeg;*.png;*.webp;*.bmp"), ("Toate fișierele", "*.*")]
+        )
+        
         if file_path:
-            self.original_cv_image = cv2.imread(file_path)
-            self.display_image(self.original_cv_image)
-            self.log("Imagine încărcată.")
+            try:
+                img_array = np.fromfile(file_path, np.uint8)
+                self.original_cv_image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+                
+                if self.original_cv_image is None:
+                    self.log("Eroare: Fișierul selectat nu este o imagine validă!")
+                    return
+
+                self.clear_previous_results()
+                self.tabview.set("Scanare Imagine")
+                self.display_image(self.original_cv_image)
+                self.log(f"Imagine încărcată: {file_path.split('/')[-1]}")
+                    
+            except Exception as e:
+                self.log(f"Eroare la deschiderea imaginii: {e}")
 
     def display_image(self, cv_img):
+        if len(cv_img.shape) == 3 and cv_img.shape[2] == 4:
+            cv_img = cv2.cvtColor(cv_img, cv2.COLOR_BGRA2BGR)
+            
         img_rgb = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
         pil_img = Image.fromarray(img_rgb)
-        pil_img.thumbnail((800, 600))
+        pil_img.thumbnail((800, 500)) 
         self.current_tk_image = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=pil_img.size)
         self.img_label.configure(image=self.current_tk_image, text="")
 
     def detect_signs_regions(self, image):
         regions = []
-        
-        # Un mic blur pentru a netezi pixelii
-        blurred = cv2.GaussianBlur(image, (5, 5), 0)
-        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
-
-        # Măști de culoare - le facem un pic mai permisive la lumină (Saturație de la 70 în sus)
-        mask_r1 = cv2.inRange(hsv, np.array([0, 70, 50]), np.array([10, 255, 255]))
-        mask_r2 = cv2.inRange(hsv, np.array([160, 70, 50]), np.array([180, 255, 255]))
-        mask_red = cv2.bitwise_or(mask_r1, mask_r2)
-        
-        mask_blue = cv2.inRange(hsv, np.array([90, 70, 50]), np.array([140, 255, 255]))
-
-        combined_mask = cv2.bitwise_or(mask_red, mask_blue)
-
-        # Curățare zgomot (Morfologie)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel, iterations=1)
-        combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-
-        contours, _ = cv2.findContours(combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            
-            # FILTRUL 1: Mărimea. Scădem la 300 ca să prindă și semnele mai îndepărtate
-            if area > 300: 
-                x, y, w, h = cv2.boundingRect(cnt)
-                aspect_ratio = float(w) / h
-                
-                # FILTRUL 2: Proporțiile. Un semn e de obicei echilibrat (aprox pătrat)
-                # Îi dăm o marjă mai mare (0.6 - 1.4) pentru poze făcute din unghi
-                if 0.6 <= aspect_ratio <= 1.4:
-                    
-                    # FILTRUL 3: Soliditatea (cât de plin e conturul)
-                    # O formă neregulată (ca un om în geacă roșie) va avea soliditate mică
-                    hull = cv2.convexHull(cnt)
-                    hull_area = cv2.contourArea(hull)
-                    if hull_area > 0:
-                        solidity = float(area) / hull_area
-                        
-                        # Un semn rotund/triunghiular e cam 50%-100% plin.
-                        if solidity > 0.4:
-                            regions.append((x, y, w, h))
-                                
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        results = self.yolo_detector(image_rgb, conf=0.3, verbose=False)
+    
+        for result in results:
+            boxes = result.boxes
+            for box in boxes:
+                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
+                w = x2 - x1
+                h = y2 - y1
+                regions.append((x1, y1, w, h))
         return regions
 
     def process_full_image(self):
@@ -239,8 +271,10 @@ class TrafficSignApp(ctk.CTk):
             return
 
         self.log("Începere scanare...")
-        output_img = self.original_cv_image.copy()
         
+        self.clear_previous_results()
+        
+        output_img = self.original_cv_image.copy()
         boxes = self.detect_signs_regions(output_img)
         self.log(f"Detectate {len(boxes)} potențiale semne.")
 
@@ -248,29 +282,19 @@ class TrafficSignApp(ctk.CTk):
             pad = 5
             roi = self.original_cv_image[max(0, y-pad):min(output_img.shape[0], y+h+pad),
                                          max(0, x-pad):min(output_img.shape[1], x+w+pad)]
-            
             if roi.size == 0: continue
 
-#debug imagini
-            # cv2.imwrite(f"debug_roi_{x}_{y}.jpg", roi)
+            if roi.shape[0] < 5 or roi.shape[1] < 5:
+                continue
 
-            #1. PREDICȚIE CNN (PyTorch)
             try:
-                # Resize și Normalizare
                 roi_resized = cv2.resize(roi, (32, 32))
                 roi_norm = roi_resized.astype("float32") / 255.0
-                
-                # Transformare pentru PyTorch: (H, W, C) -> (C, H, W)
                 roi_transposed = np.transpose(roi_norm, (2, 0, 1))
-                
-                # Convertire la Tensor și adăugare dimensiune Batch -> (1, 3, 32, 32)
                 roi_tensor = torch.from_numpy(roi_transposed).unsqueeze(0)
                 
-                # Inferență fără a calcula gradienți (economisește memorie)
                 with torch.no_grad():
-
                     outputs = self.cnn_model(roi_tensor)
-                    # Aplicăm Softmax pentru a transforma output-ul în probabilități
                     probs = F.softmax(outputs, dim=1)
                     conf_cnn_tensor, predicted = torch.max(probs, 1)
                     
@@ -283,10 +307,6 @@ class TrafficSignApp(ctk.CTk):
                 label_cnn = "Err"
                 conf_cnn = 0
 
-            if conf_cnn < 90.0:
-                continue
-
-            #2. PREDICȚIE SVM
             try:
                 roi_hog_input = cv2.resize(roi, (32, 32))
                 feats = preprocess_for_hog(np.array([roi_hog_input])) 
@@ -295,13 +315,13 @@ class TrafficSignApp(ctk.CTk):
             except:
                 label_svm = "Err"
 
-            #3. DESENARE REZULTATE 
+            self.add_detection_to_ui(roi, label_cnn, conf_cnn, label_svm)
+
             cv2.rectangle(output_img, (x, y), (x+w, y+h), (0, 255, 0), 2)
-            
             text_cnn = f"CNN: {label_cnn} ({int(conf_cnn)}%)"
             text_svm = f"SVM: {label_svm}"
             
-            cv2.rectangle(output_img, (x, y-40), (x+w+50, y), (0, 0, 0), -1)
+            cv2.rectangle(output_img, (x, y-40), (x+max(w, 180), y), (0, 0, 0), -1)
             cv2.putText(output_img, text_cnn, (x, y-25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
             cv2.putText(output_img, text_svm, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
 

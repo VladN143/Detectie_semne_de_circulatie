@@ -1,4 +1,12 @@
 /.vscode
 /Traffic_sign_detection_data
 /dataset_final_crop
+/matrici_clase_svm
+/Matrici_Per_Clasa
+/runs/detect
+/dataset_final_crop.zip
+/dataset_train_yolo.yaml
+/numar_semne_in_folder.py
+/yolov8n.pt
 *.pth
+*.pkl

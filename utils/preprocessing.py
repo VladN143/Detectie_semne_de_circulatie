@@ -11,7 +11,7 @@ IMG_HEIGHT = 32
 IMG_WIDTH = 32
 CHANNELS = 3 
 
-NUM_CLASSES = 43 
+NUM_CLASSES = 43
 
 def load_data(data_dir, num_classes):
     """
@@ -59,7 +59,6 @@ def preprocess_for_cnn(images):
     print("Preprocesare pentru CNN (Normalizare)...")
     images_cnn = images.astype("float32") / 255.0
     
-    # normaliazre la media rgb
 
     return images_cnn
 
